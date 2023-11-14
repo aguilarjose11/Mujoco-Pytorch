@@ -2,7 +2,7 @@ from configparser import ConfigParser
 from argparse import ArgumentParser
 
 import torch
-import gym
+import gymnasium as gym
 import numpy as np
 import os
 
@@ -15,7 +15,7 @@ os.makedirs('./model_weights', exist_ok=True)
 
 parser = ArgumentParser('parameters')
 
-parser.add_argument("--env_name", type=str, default = 'Hopper-v2', help = "'Ant-v2','HalfCheetah-v2','Hopper-v2','Humanoid-v2','HumanoidStandup-v2',\
+parser.add_argument("--env_name", type=str, default = 'HalfCheetah-v2', help = "'Ant-v2','HalfCheetah-v2','Hopper-v2','Humanoid-v2','HumanoidStandup-v2',\
           'InvertedDoublePendulum-v2', 'InvertedPendulum-v2' (default : Hopper-v2)")
 parser.add_argument("--algo", type=str, default = 'ppo', help = 'algorithm to adjust (default : ppo)')
 parser.add_argument('--train', type=bool, default=True, help="(default: True)")
@@ -41,13 +41,14 @@ if args.tensorboard:
     writer = SummaryWriter()
 else:
     writer = None
-    
+
+""" Select environment """
 env = gym.make(args.env_name)
 action_dim = env.action_space.shape[0]
 state_dim = env.observation_space.shape[0]
 state_rms = RunningMeanStd(state_dim)
 
-
+""" Select RL Algorithm"""
 if args.algo == 'ppo' :
     agent = PPO(writer, device, state_dim, action_dim, agent_args)
 elif args.algo == 'sac' :
@@ -67,20 +68,24 @@ if args.load != 'no':
 score_lst = []
 state_lst = []
 
+# on_policy only applies to PPO. All others are off-policy
 if agent_args.on_policy == True:
     score = 0.0
-    state_ = (env.reset())
+    state_, _ = (env.reset())
+    # input observation standardization
     state = np.clip((state_ - state_rms.mean) / (state_rms.var ** 0.5 + 1e-8), -5, 5)
     for n_epi in range(args.epochs):
         for t in range(agent_args.traj_length):
-            if args.render:    
+            if args.render:
                 env.render()
             state_lst.append(state_)
-            mu,sigma = agent.get_action(torch.from_numpy(state).float().to(device))
-            dist = torch.distributions.Normal(mu,sigma[0])
+
+            mu,sigma = agent.get_action(torch.from_numpy(np.array(state)).float().to(device))
+            dist = torch.distributions.Normal(mu,sigma[0]) # Stochastic Actions!
             action = dist.sample()
             log_prob = dist.log_prob(action).sum(-1,keepdim = True)
-            next_state_, reward, done, info = env.step(action.cpu().numpy())
+            next_state_, reward, done, trunc, info = env.step(action.cpu().numpy())
+            # input observation standardization
             next_state = np.clip((next_state_ - state_rms.mean) / (state_rms.var ** 0.5 + 1e-8), -5, 5)
             transition = make_transition(state,\
                                          action.cpu().numpy(),\
@@ -91,8 +96,9 @@ if agent_args.on_policy == True:
                                         )
             agent.put_data(transition) 
             score += reward
-            if done:
-                state_ = (env.reset())
+            if done or trunc:
+                state_, _ = (env.reset())
+                # input observation standardization
                 state = np.clip((state_ - state_rms.mean) / (state_rms.var ** 0.5 + 1e-8), -5, 5)
                 score_lst.append(score)
                 if args.tensorboard:
@@ -101,15 +107,16 @@ if agent_args.on_policy == True:
             else:
                 state = next_state
                 state_ = next_state_
-
+        # Training occurs after obtaining a trajectory.
         agent.train_net(n_epi)
+        # Update observation state standardization variables.
         state_rms.update(np.vstack(state_lst))
         if n_epi%args.print_interval==0 and n_epi!=0:
             print("# of episode :{}, avg score : {:.1f}".format(n_epi, sum(score_lst)/len(score_lst)))
             score_lst = []
         if n_epi%args.save_interval==0 and n_epi!=0:
             torch.save(agent.state_dict(),'./model_weights/agent_'+str(n_epi))
-            
+# For SAC and DDPG IGNORE FOR NOW
 else : # off policy 
     for n_epi in range(args.epochs):
         score = 0.0

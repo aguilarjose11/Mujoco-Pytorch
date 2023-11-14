@@ -1,3 +1,5 @@
 __pycache__
 *.ipynb
 /runs
+.idea/
+model_weights/

@@ -3,3 +3,8 @@ __pycache__
 /runs
 .idea/
 model_weights/
+other_weights/
+*.pkl
+*.tar.gz
+figures/
+MUJOCO_LOG.TXT
